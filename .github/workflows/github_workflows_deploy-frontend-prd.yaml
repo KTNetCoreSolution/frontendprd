@@ -12,32 +12,33 @@ jobs:
         with:
           repository: KTNetCoreSolution/frontend
           ref: main
+          token: ${{ secrets.NETCORE_PROD_APP_TOKEN }}
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '19.1'
       - name: Install dependencies
         run: npm ci
-        working-directory: .
+        working-directory: ${{ github.workspace }}/source/frontend
       - name: Apply dev .env
         run: |
-          Copy-Item -Path D:\netcore\frontend\.env -Destination .\.env -Force
+          Copy-Item -Path "${{ github.workspace }}/.env" -Destination "${{ github.workspace }}/.env" -Force
       - name: Build frontend
         run: npm run build -- --mode production
-        working-directory: .
+        working-directory: ${{ github.workspace }}/source/frontend
       - name: Copy to deploy
-        run: Copy-Item -Path .\dist\* -Destination D:\netcore\deploy\frontend -Recurse -Force
+        run: Copy-Item -Path "${{ github.workspace }}/source/frontend/dist/*" -Destination "${{ github.workspace }}/deploy/frontend" -Recurse -Force
       - name: Reload Nginx
-        run: D:\tool\nginx\nginx.exe -s reload
+        run: D:\tool\nginx\.\nginx.exe -s reload
       - name: Backup source
         run: |
           $date = Get-Date -Format "yyyyMM"
           $day = Get-Date -Format "yyyyMMdd"
-          New-Item -ItemType Directory -Path D:\netcore\backup\source\frontend\$date -Force
-          Compress-Archive -Path .\* -DestinationPath D:\netcore\backup\source\frontend\$date\$day.zip -Force
+          New-Item -ItemType Directory -Path "${{ github.workspace }}/backup/source/frontend/$date" -Force
+          Compress-Archive -Path "${{ github.workspace }}/source/frontend/*" -DestinationPath "${{ github.workspace }}/backup/source/frontend/$date/$day.zip" -Force
       - name: Backup deploy
         run: |
           $date = Get-Date -Format "yyyyMM"
           $day = Get-Date -Format "yyyyMMdd"
-          New-Item -ItemType Directory -Path D:\netcore\backup\deploy\frontend\$date -Force
-          Compress-Archive -Path D:\netcore\deploy\frontend\* -DestinationPath D:\netcore\backup\deploy\frontend\$date\$day.zip -Force
+          New-Item -ItemType Directory -Path "${{ github.workspace }}/backup/deploy/frontend/$date" -Force
+          Compress-Archive -Path "${{ github.workspace }}/deploy/frontend/*" -DestinationPath "${{ github.workspace }}/backup/deploy/frontend/$date/$day.zip" -Force
