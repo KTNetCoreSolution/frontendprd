@@ -1,44 +1,101 @@
 name: Deploy Frontend (Prod)
+
 on:
   push:
     branches:
       - main
+
 jobs:
   deploy-frontend-prd:
-    runs-on: [self-hosted, windows, prod]
+    runs-on: [self-hosted, Windows, X64, prod-runner]
+
     steps:
-      - name: Checkout dev frontend
+      # 1. 현재 소스 백업
+      - name: Backup current source files
+        run: |
+          $baseDir = 'D:\actions_work\netcore'
+          $sourceDir = "$baseDir\source\frontend"
+          $backupBaseDir = "$baseDir\backup\source\frontend"
+          $currentMonthDir = "$backupBaseDir\$(Get-Date -Format 'yyyyMM')"
+          $currentDateTime = "$(Get-Date -Format 'yyyyMMddHHmmss').zip"
+
+          if (!(Test-Path -Path $currentMonthDir)) {
+            New-Item -ItemType Directory -Path $currentMonthDir -Force
+          }
+
+          $backupFile = Join-Path -Path $currentMonthDir -ChildPath $currentDateTime
+          Compress-Archive -Path "$sourceDir\*" -DestinationPath $backupFile -Force
+          Write-Host "Frontend source files have been backed up to: $backupFile"
+
+      # 2. 현재 배포 파일 백업
+      - name: Backup current deploy files
+        run: |
+          $baseDir = 'D:\actions_work\netcore'
+          $deployDir = "$baseDir\deploy\frontend"
+          $backupBaseDir = "$baseDir\backup\deploy\frontend"
+          $currentMonthDir = "$backupBaseDir\$(Get-Date -Format 'yyyyMM')"
+          $currentDateTime = "$(Get-Date -Format 'yyyyMMddHHmmss').zip"
+
+          if (!(Test-Path -Path $currentMonthDir)) {
+            New-Item -ItemType Directory -Path $currentMonthDir -Force
+          }
+
+          $backupFile = Join-Path -Path $currentMonthDir -ChildPath $currentDateTime
+          Compress-Archive -Path "$deployDir\*" -DestinationPath $backupFile -Force
+          Write-Host "Frontend deploy files have been backed up to: $backupFile"
+
+      # 3. 소스 코드 다운로드 (Dev 저장소에서 소스 가져오기)
+      - name: Checkout source repository
         uses: actions/checkout@v4
         with:
           repository: KTNetCoreSolution/frontend
           ref: main
-          token: ${{ secrets.NETCORE_PROD_APP_TOKEN }}
+          token: ${{ secrets.NETCORE_DEV_FRONTEND_APP_TOKEN }}
+          path: source/frontend
+
+      # 4. Node.js 설치
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '19.1'
+
+      # 5. 의존성 설치
       - name: Install dependencies
         run: npm ci
-        working-directory: ${{ github.workspace }}/source/frontend
-      - name: Apply dev .env
-        run: |
-          Copy-Item -Path "${{ github.workspace }}/.env" -Destination "${{ github.workspace }}/.env" -Force
+        working-directory: D:\actions_work\netcore\source\frontend
+
+      # 6. 빌드 실행
       - name: Build frontend
         run: npm run build -- --mode production
-        working-directory: ${{ github.workspace }}/source/frontend
-      - name: Copy to deploy
-        run: Copy-Item -Path "${{ github.workspace }}/source/frontend/dist/*" -Destination "${{ github.workspace }}/deploy/frontend" -Recurse -Force
+        working-directory: D:\actions_work\netcore\source\frontend
+
+      # 7. 빌드 결과 배포 디렉토리로 복사
+      - name: Deploy frontend build
+        run: |
+          $baseDir = 'D:\actions_work\netcore'
+          $deployDir = "$baseDir\deploy\frontend"
+          $buildDir = "$baseDir\source\frontend\dist"
+
+          if (!(Test-Path -Path $deployDir)) {
+            New-Item -ItemType Directory -Path $deployDir -Force
+          }
+
+          Copy-Item -Path "$buildDir\*" -Destination "$deployDir" -Recurse -Force
+          Write-Host "Frontend build has been copied to: $deployDir"
+
+      # 8. 배포 저장소에 커밋 및 푸시 (Prod 저장소)
+      - name: Commit and push to deployment repo
+        run: |
+          cd 'D:\actions_work\netcore\deploy\frontend'
+          git init
+          git remote add origin https://github.com/KTNetCoreSolution/frontendprd.git
+          git add .
+          git commit -m "Deploy frontend build at $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+          git branch -M main
+          git push -u origin main --force
+        env:
+          GITHUB_TOKEN: ${{ secrets.NETCORE_PROD_FRONTEND_APP_TOKEN }}
+
+      # 9. Nginx 다시 로드
       - name: Reload Nginx
-        run: D:\tool\nginx\.\nginx.exe -s reload
-      - name: Backup source
-        run: |
-          $date = Get-Date -Format "yyyyMM"
-          $day = Get-Date -Format "yyyyMMdd"
-          New-Item -ItemType Directory -Path "${{ github.workspace }}/backup/source/frontend/$date" -Force
-          Compress-Archive -Path "${{ github.workspace }}/source/frontend/*" -DestinationPath "${{ github.workspace }}/backup/source/frontend/$date/$day.zip" -Force
-      - name: Backup deploy
-        run: |
-          $date = Get-Date -Format "yyyyMM"
-          $day = Get-Date -Format "yyyyMMdd"
-          New-Item -ItemType Directory -Path "${{ github.workspace }}/backup/deploy/frontend/$date" -Force
-          Compress-Archive -Path "${{ github.workspace }}/deploy/frontend/*" -DestinationPath "${{ github.workspace }}/backup/deploy/frontend/$date/$day.zip" -Force
+        run: D:\tool\nginx\nginx.exe -s reload
