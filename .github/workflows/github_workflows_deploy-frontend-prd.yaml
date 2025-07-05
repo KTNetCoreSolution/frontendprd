@@ -5,19 +5,24 @@ on:
     branches:
       - main
 
+permissions:
+  contents: write           # 소스 코드와 Deploy Repository 접근 권한
+  id-token: write           # OIDC 토큰 권한 (보안 상 필요한 경우)
+
 jobs:
   deploy-frontend-prd:
-    runs-on: [self-hosted, Windows, X64, prod-runner]
+    runs-on: [self-hosted, Windows, X64, prod]
 
     steps:
-      # 1. 현재 소스 백업
+      # 1. 현재 소스 파일 백업
       - name: Backup current source files
+        shell: pwsh
         run: |
           $baseDir = 'D:\actions_work\netcore'
           $sourceDir = "$baseDir\source\frontend"
           $backupBaseDir = "$baseDir\backup\source\frontend"
-          $currentMonthDir = "$backupBaseDir\$(Get-Date -Format 'yyyyMM')"
-          $currentDateTime = "$(Get-Date -Format 'yyyyMMddHHmmss').zip"
+          $currentMonthDir = Join-Path -Path $backupBaseDir -ChildPath (Get-Date -Format 'yyyyMM')
+          $currentDateTime = "$(Get-Date -Format 'yyyyMMdd-HHmmss').zip"
 
           if (!(Test-Path -Path $currentMonthDir)) {
             New-Item -ItemType Directory -Path $currentMonthDir -Force
@@ -25,16 +30,17 @@ jobs:
 
           $backupFile = Join-Path -Path $currentMonthDir -ChildPath $currentDateTime
           Compress-Archive -Path "$sourceDir\*" -DestinationPath $backupFile -Force
-          Write-Host "Frontend source files have been backed up to: $backupFile"
+          Write-Host "✅ Frontend source files have been backed up to: $backupFile"
 
       # 2. 현재 배포 파일 백업
       - name: Backup current deploy files
+        shell: pwsh
         run: |
           $baseDir = 'D:\actions_work\netcore'
           $deployDir = "$baseDir\deploy\frontend"
           $backupBaseDir = "$baseDir\backup\deploy\frontend"
-          $currentMonthDir = "$backupBaseDir\$(Get-Date -Format 'yyyyMM')"
-          $currentDateTime = "$(Get-Date -Format 'yyyyMMddHHmmss').zip"
+          $currentMonthDir = Join-Path -Path $backupBaseDir -ChildPath (Get-Date -Format 'yyyyMM')
+          $currentDateTime = "$(Get-Date -Format 'yyyyMMdd-HHmmss').zip"
 
           if (!(Test-Path -Path $currentMonthDir)) {
             New-Item -ItemType Directory -Path $currentMonthDir -Force
@@ -42,35 +48,43 @@ jobs:
 
           $backupFile = Join-Path -Path $currentMonthDir -ChildPath $currentDateTime
           Compress-Archive -Path "$deployDir\*" -DestinationPath $backupFile -Force
-          Write-Host "Frontend deploy files have been backed up to: $backupFile"
+          Write-Host "✅ Frontend deployment files have been backed up to: $backupFile"
 
-      # 3. 소스 코드 다운로드 (Dev 저장소에서 소스 가져오기)
+      # 3. 소스 코드 다운로드 (시크릿 DEV & PROD 확인 및 사용)
       - name: Checkout source repository
         uses: actions/checkout@v4
         with:
           repository: KTNetCoreSolution/frontend
           ref: main
-          token: ${{ secrets.NETCORE_DEV_FRONTEND_APP_TOKEN }}
+          token: ${{ secrets.NETCORE_DEV_FRONTEND_APP_TOKEN }}  # 개발 시크릿 사용
           path: source/frontend
+      - name: Log development repository usage
+        shell: pwsh
+        run: |
+          Write-Host "ℹ️ Frontend source code checked out using DEV secret token."
 
-      # 4. Node.js 설치
+      # 4. Node.js 설치 (운영 환경 최적화 포함)
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '19.1'
+          check-latest: false  # 이미 설치된 버전 우선 사용
 
       # 5. 의존성 설치
       - name: Install dependencies
+        shell: pwsh
         run: npm ci
-        working-directory: D:\actions_work\netcore\source\frontend
+        working-directory: D:/actions_work/netcore/source/frontend
 
       # 6. 빌드 실행
-      - name: Build frontend
+      - name: Build frontend (Production Mode)
+        shell: pwsh
         run: npm run build -- --mode production
-        working-directory: D:\actions_work\netcore\source\frontend
+        working-directory: D:/actions_work/netcore/source/frontend
 
-      # 7. 빌드 결과 배포 디렉토리로 복사
+      # 7. 빌드 결과 배포 디렉터리로 복사
       - name: Deploy frontend build
+        shell: pwsh
         run: |
           $baseDir = 'D:\actions_work\netcore'
           $deployDir = "$baseDir\deploy\frontend"
@@ -80,22 +94,40 @@ jobs:
             New-Item -ItemType Directory -Path $deployDir -Force
           }
 
-          Copy-Item -Path "$buildDir\*" -Destination "$deployDir" -Recurse -Force
-          Write-Host "Frontend build has been copied to: $deployDir"
+          # 기존 배포 파일 삭제
+          Remove-Item -Path "$deployDir\*" -Recurse -Force -ErrorAction SilentlyContinue
 
-      # 8. 배포 저장소에 커밋 및 푸시 (Prod 저장소)
-      - name: Commit and push to deployment repo
+          # 새 빌드 파일 복사
+          Copy-Item -Path "$buildDir\*" -Destination "$deployDir" -Recurse -Force
+          Write-Host "✅ Frontend build files have been copied to: $deployDir"
+
+      # 8. 배포 저장소에 커밋 및 푸시 (운영 시크릿 사용)
+      - name: Commit and push deployment to PROD repository
+        shell: pwsh
         run: |
-          cd 'D:\actions_work\netcore\deploy\frontend'
-          git init
-          git remote add origin https://github.com/KTNetCoreSolution/frontendprd.git
+          $deployDir = "D:\actions_work\netcore\deploy\frontend"
+          cd $deployDir
+
+          if (!(Test-Path '.git')) {
+            git init
+            git remote add origin https://github.com/KTNetCoreSolution/frontendprd.git
+          }
+
           git add .
           git commit -m "Deploy frontend build at $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
           git branch -M main
           git push -u origin main --force
         env:
-          GITHUB_TOKEN: ${{ secrets.NETCORE_PROD_FRONTEND_APP_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.NETCORE_PROD_FRONTEND_APP_TOKEN }}  # 운영 시크릿 활용
 
       # 9. Nginx 다시 로드
-      - name: Reload Nginx
-        run: D:\tool\nginx\nginx.exe -s reload
+      - name: Reload Nginx to apply deployment
+        shell: pwsh
+        run: |
+          $nginxPath = "D:\tool\nginx\nginx.exe"
+
+          if (Test-Path $nginxPath) {
+            Start-Process -FilePath $nginxPath -ArgumentList '-s reload' -NoNewWindow
+            Write-Host "✅ Nginx server reloaded to apply new frontend deployment."
+          } else {
+            Write-Host "⚠️ Warning: Nginx executable not found at $nginxPath. Please check the server configuration."
